@@ -23,6 +23,7 @@
     <div id="chat-loader" class="chat-loader hidden" aria-live="polite" aria-busy="false">
       <span class="loader-dots" aria-hidden="true"><span></span><span></span><span></span></span>
       <span id="loader-label" class="loader-label">Thinking…</span>
+      <span id="loader-time" class="loader-time">0.0s</span>
     </div>
     <div class="composer">
       <textarea id="prompt" rows="2" placeholder="Ask anything…"></textarea>
@@ -34,6 +35,7 @@
     </div>
     <div class="hints">+ · Listen &nbsp; - · Screen</div>
   </div>
+  <script src="../node_modules/marked/lib/marked.umd.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

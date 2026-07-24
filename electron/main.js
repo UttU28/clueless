@@ -8,7 +8,7 @@ const {
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { execFile } = require('child_process');
+const { execFile, spawnSync } = require('child_process');
 const { promisify } = require('util');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
@@ -18,18 +18,33 @@ const execFileAsync = promisify(execFile);
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
+let cleanupDone = false;
+
+function runCleanup() {
+  if (cleanupDone) return;
+  cleanupDone = true;
+  const deploy = path.join(__dirname, '..', 'deploy.sh');
+  if (!fs.existsSync(deploy)) return;
+  spawnSync('bash', [deploy], {
+    cwd: path.join(__dirname, '..'),
+    stdio: 'ignore',
+    env: { ...process.env, CLUELESS_CLEANUP: '1' },
+  });
+}
 /** @type {'gemma' | 'gemini'} */
 let aiProvider = process.env.CLUELESS_DEFAULT_PROVIDER === 'gemini' ? 'gemini' : 'gemma';
 
 const INTERVIEW_SYSTEM_PROMPT = `You are an expert interview coach helping someone answer live interview questions.
-Give clear, confident, spoken-style answers.
+Give clear, confident answers formatted in Markdown (**bold** key terms, bullet lists, ## headers for sections).
 Use this structure when helpful: direct answer first, 2-4 concrete points, brief real-world example, short closing line.
 For technical questions: explain the concept simply, mention trade-offs, and note when you'd ask clarifying questions.
 For behavioral questions: use concise STAR format (Situation, Task, Action, Result).
 Keep answers under 180 words unless the question clearly needs more depth.
 Do not mention that you are an AI.`;
 
-const GEMMA_SYSTEM_PROMPT = 'You are a concise helpful assistant. Short spoken-style answers.';
+const GEMMA_SYSTEM_PROMPT = `You are a concise helpful assistant.
+Format every reply in Markdown: use **bold** labels, bullet lists, and short headers (##) when helpful.
+Keep answers clear and scannable.`;
 
 function getConfig() {
   const maxTokens = Number.parseInt(process.env.LOCAL_LLM_MAX_TOKENS || '4096', 10);
@@ -308,7 +323,10 @@ function setupIpc() {
     return transcribeAudio(audioBase64, mimeType, getConfig());
   });
 
-  ipcMain.on('window-close', () => app.quit());
+  ipcMain.on('window-close', () => {
+    runCleanup();
+    app.quit();
+  });
 }
 
 function sendShortcut(action) {
@@ -344,6 +362,7 @@ app.whenReady().then(() => {
 });
 
 app.on('will-quit', () => {
+  runCleanup();
   globalShortcut.unregisterAll();
 });
 

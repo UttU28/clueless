@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Clueless — Arch Linux installer (npm, Python, CUDA 12 runtime, Whisper, Electron)
+# Clueless — install, start, and cleanup (Arch Linux)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -169,7 +169,77 @@ start_app() {
   npm start
 }
 
-main() {
+kill_matching() {
+  local label="$1"
+  local pattern="$2"
+  local pids
+
+  pids=$(pgrep -f "$pattern" 2>/dev/null || true)
+  if [[ -z "$pids" ]]; then
+    ok "No $label processes running"
+    return 0
+  fi
+
+  local filtered=()
+  local pid
+  for pid in $pids; do
+    [[ "$pid" -eq $$ || "$pid" -eq ${PPID:-0} ]] && continue
+    filtered+=("$pid")
+  done
+
+  if ((${#filtered[@]} == 0)); then
+    ok "No $label processes running"
+    return 0
+  fi
+
+  info "Stopping $label (PIDs: ${filtered[*]})…"
+  kill -TERM "${filtered[@]}" 2>/dev/null || true
+  sleep 1
+
+  local remaining=()
+  for pid in "${filtered[@]}"; do
+    kill -0 "$pid" 2>/dev/null && remaining+=("$pid")
+  done
+
+  if ((${#remaining[@]} > 0)); then
+    warn "Force-killing $label (PIDs: ${remaining[*]})…"
+    kill -KILL "${remaining[@]}" 2>/dev/null || true
+  fi
+
+  ok "$label stopped"
+}
+
+clean_temp_files() {
+  local removed=0
+  local f
+
+  for f in /tmp/clueless-audio-* /tmp/clueless-shot-* /tmp/clueless-test.wav; do
+    [[ -e "$f" ]] || continue
+    rm -f -- "$f" && removed=$((removed + 1))
+  done
+
+  if ((removed > 0)); then
+    ok "Removed $removed temp file(s) from /tmp"
+  else
+    ok "No clueless temp files in /tmp"
+  fi
+}
+
+show_gpu_usage() {
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    info "GPU memory after cleanup:"
+    nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader 2>/dev/null || true
+  fi
+}
+
+cmd_cleanup() {
+  kill_matching "Whisper (venv python)" "$ROOT/venv/bin/python3.*whisper_local.py"
+  kill_matching "Whisper (python script)" "$ROOT/scripts/whisper_local.py"
+  clean_temp_files
+  show_gpu_usage
+}
+
+cmd_install() {
   echo
   info "Clueless installer"
   echo "Directory: $ROOT"
@@ -233,4 +303,8 @@ main() {
   start_app
 }
 
-main "$@"
+if [[ "${CLUELESS_CLEANUP:-0}" == "1" ]]; then
+  cmd_cleanup
+else
+  cmd_install
+fi

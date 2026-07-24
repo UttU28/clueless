@@ -6,14 +6,35 @@ const btnGemma = document.getElementById('btn-provider-gemma');
 const btnGemini = document.getElementById('btn-provider-gemini');
 const chatLoader = document.getElementById('chat-loader');
 const loaderLabel = document.getElementById('loader-label');
+const loaderTime = document.getElementById('loader-time');
 const btnSend = document.getElementById('btn-send');
 const btnScreen = document.getElementById('btn-screen');
 const btnListen = document.getElementById('btn-listen');
 const history = [];
 let currentProvider = 'gemma';
 let isLoading = false;
+let loadStart = 0;
+let loadBaseLabel = 'Thinking…';
+let loaderInterval = null;
 
-function showLoader(label = 'Thinking…') {
+function formatElapsed(ms) {
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${Math.floor(s % 60)}s`;
+}
+
+function updateLoaderTimer() {
+  if (!loadStart) return;
+  const elapsed = formatElapsed(performance.now() - loadStart);
+  loaderTime.textContent = elapsed;
+  status.textContent = `${loadBaseLabel} · ${elapsed}`;
+}
+
+function showLoader(label = 'Thinking…', { keepTimer = false } = {}) {
+  loadBaseLabel = label;
+  if (!keepTimer || !loadStart) loadStart = performance.now();
+
   isLoading = true;
   loaderLabel.textContent = label;
   chatLoader.classList.remove('hidden');
@@ -22,16 +43,29 @@ function showLoader(label = 'Thinking…') {
   btnScreen.disabled = true;
   btnListen.disabled = true;
   prompt.disabled = true;
+
+  updateLoaderTimer();
+  if (!loaderInterval) {
+    loaderInterval = setInterval(updateLoaderTimer, 100);
+  }
 }
 
 function hideLoader() {
+  const elapsed = loadStart ? performance.now() - loadStart : 0;
+  if (loaderInterval) {
+    clearInterval(loaderInterval);
+    loaderInterval = null;
+  }
+  loadStart = 0;
   isLoading = false;
   chatLoader.classList.add('hidden');
   chatLoader.setAttribute('aria-busy', 'false');
+  loaderTime.textContent = '0.0s';
   btnSend.disabled = false;
   btnScreen.disabled = false;
   btnListen.disabled = false;
   prompt.disabled = false;
+  return elapsed;
 }
 
 function updateProviderUi(provider, modelShort) {
@@ -55,10 +89,32 @@ async function setProvider(provider) {
 btnGemma.onclick = () => setProvider('gemma');
 btnGemini.onclick = () => setProvider('gemini');
 
-function msg(role, text) {
+function renderMarkdown(text) {
+  if (typeof marked !== 'undefined') {
+    return marked.parse(text, { breaks: true, gfm: true });
+  }
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+}
+
+function msg(role, text, opts = {}) {
   const d = document.createElement('div');
   d.className = `msg ${role}`;
-  d.textContent = text;
+
+  if (role === 'bot') {
+    if (opts.elapsedMs != null) {
+      const meta = document.createElement('div');
+      meta.className = 'msg-meta';
+      meta.textContent = `⏱ ${formatElapsed(opts.elapsedMs)}`;
+      d.appendChild(meta);
+    }
+    const body = document.createElement('div');
+    body.className = 'msg-body md';
+    body.innerHTML = renderMarkdown(text);
+    d.appendChild(body);
+  } else {
+    d.textContent = text;
+  }
+
   chat.appendChild(d);
   chat.scrollTop = chat.scrollHeight;
   if (role === 'user') history.push({ role: 'user', content: text });
@@ -70,21 +126,22 @@ async function sendChat(textOverride, skipUser = false) {
   if (!text || (isLoading && !skipUser)) return;
   prompt.value = '';
   if (!skipUser) msg('user', text);
-  status.textContent = 'Thinking…';
+
   if (!isLoading) showLoader('Thinking…');
-  else loaderLabel.textContent = 'Thinking…';
+  else showLoader('Thinking…', { keepTimer: true });
+
   try {
     const messages = [
       ...history.filter(m => m.role === 'user' || m.role === 'assistant'),
     ];
     const { text: reply } = await window.clueless.chat(messages);
-    msg('bot', reply);
-    status.textContent = 'Ready';
+    const elapsedMs = hideLoader();
+    msg('bot', reply, { elapsedMs });
+    status.textContent = `Ready · ${formatElapsed(elapsedMs)}`;
   } catch (e) {
+    hideLoader();
     msg('sys', `Error: ${e.message}`);
     status.textContent = 'Error';
-  } finally {
-    hideLoader();
   }
 }
 
@@ -92,20 +149,19 @@ async function analyzeScreen() {
   if (isLoading) return;
   const q = prompt.value.trim() || 'Help me with what is on screen.';
   msg('user', `[Screen] ${q}`);
-  status.textContent = 'Capturing…';
   showLoader('Capturing screen…');
+
   try {
-    loaderLabel.textContent = 'Analyzing screen…';
-    status.textContent = 'Analyzing…';
+    showLoader('Analyzing screen…', { keepTimer: true });
     const { text } = await window.clueless.analyzeScreen(q);
-    msg('bot', text);
+    const elapsedMs = hideLoader();
+    msg('bot', text, { elapsedMs });
     prompt.value = '';
-    status.textContent = 'Ready';
+    status.textContent = `Ready · ${formatElapsed(elapsedMs)}`;
   } catch (e) {
+    hideLoader();
     msg('sys', `Screen error: ${e.message}`);
     status.textContent = 'Error';
-  } finally {
-    hideLoader();
   }
 }
 
@@ -129,7 +185,6 @@ async function toggleListen() {
       listening = false;
       btn.classList.remove('active');
       btn.textContent = '🎤 Listen';
-      status.textContent = 'Transcribing…';
       showLoader('Transcribing…');
       const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
       const b64 = await new Promise((res, rej) => {
@@ -148,14 +203,14 @@ async function toggleListen() {
           }
           await sendChat(r.text, true);
         } else {
+          hideLoader();
           msg('sys', 'No speech detected.');
           status.textContent = 'Ready';
-          hideLoader();
         }
       } catch (e) {
+        hideLoader();
         msg('sys', `Whisper: ${e.message}`);
         status.textContent = 'Error';
-        hideLoader();
       }
     };
     recorder.start();
@@ -206,6 +261,6 @@ document.addEventListener('keydown', (e) => {
   }
 
   if (cfg.whisper?.available) msg('sys', `Whisper: ${cfg.whisper.message}`);
-  else msg('sys', 'Whisper not found — run ./installer.sh to set up venv');
+  else msg('sys', 'Whisper not found — run ./deploy.sh to set up venv');
   msg('sys', 'Shortcuts: + Listen · - Screen');
 })();

@@ -30,10 +30,10 @@ LOCAL_LLM_API_KEY=not-needed
 
 ## Whisper
 
-Python deps live in a local **`venv/`** (created by `./installer.sh`):
+Python deps live in a local **`venv/`** (created by `./deploy.sh`):
 
 ```bash
-./installer.sh
+./deploy.sh
 npm run whisper:probe   # should show device: cuda
 ```
 
@@ -56,7 +56,7 @@ sudo pacman -S nodejs npm ffmpeg unzip
 `faster-whisper` needs **CUDA 12 runtime libs** (`libcublas.so.12`). They are installed into `./venv` via `requirements.txt`:
 
 ```bash
-./installer.sh
+./deploy.sh
 npm run whisper:probe   # should show device: cuda
 ```
 
@@ -91,3 +91,7 @@ Gemini uses an interview-focused system prompt and can read screenshots when you
 
 Customize in `.env` only if you need global shortcuts with modifiers (e.g. `Control+Shift+L`).
 Bare `+` and `-` work when the overlay is focused.
+
+## Cleanup
+
+Clicking **×** runs cleanup automatically (stops Whisper, clears temp files, frees GPU).
