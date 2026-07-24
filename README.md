@@ -69,7 +69,7 @@ Toggle **Gemma** / **Gemini** in the app header.
 | Provider | Use case | Config |
 |----------|----------|--------|
 | **Gemma** | Your remote vLLM server | `LOCAL_LLM_*` in `.env` |
-| **Gemini** | Interview coaching (Google AI) | `GEMINI_API_KEY` + `GEMINI_MODEL=gemini-2.0-flash` |
+| **Gemini** | Interview coaching (Google AI) | `GEMINI_API_KEY` + `GEMINI_MODEL=gemini-3.5-flash` (free tier) |
 
 Get a Gemini API key: https://aistudio.google.com/apikey
 

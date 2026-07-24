@@ -89,6 +89,10 @@ async function setProvider(provider) {
 btnGemma.onclick = () => setProvider('gemma');
 btnGemini.onclick = () => setProvider('gemini');
 
+function formatTimingMeta({ receivedMs, renderMs, shownMs }) {
+  return `⏱ sent→recv ${formatElapsed(receivedMs)} · MD ${renderMs.toFixed(0)}ms · shown ${formatElapsed(shownMs)}`;
+}
+
 function renderMarkdown(text) {
   if (typeof marked !== 'undefined') {
     return marked.parse(text, { breaks: true, gfm: true });
@@ -101,15 +105,29 @@ function msg(role, text, opts = {}) {
   d.className = `msg ${role}`;
 
   if (role === 'bot') {
-    if (opts.elapsedMs != null) {
+    const body = document.createElement('div');
+    body.className = 'msg-body md';
+
+    const renderStart = performance.now();
+    body.innerHTML = renderMarkdown(text);
+    const renderMs = performance.now() - renderStart;
+
+    if (opts.timing) {
+      const meta = document.createElement('div');
+      meta.className = 'msg-meta';
+      meta.textContent = formatTimingMeta({
+        receivedMs: opts.timing.receivedMs,
+        renderMs,
+        shownMs: performance.now() - opts.timing.requestStart,
+      });
+      d.appendChild(meta);
+    } else if (opts.elapsedMs != null) {
       const meta = document.createElement('div');
       meta.className = 'msg-meta';
       meta.textContent = `⏱ ${formatElapsed(opts.elapsedMs)}`;
       d.appendChild(meta);
     }
-    const body = document.createElement('div');
-    body.className = 'msg-body md';
-    body.innerHTML = renderMarkdown(text);
+
     d.appendChild(body);
   } else {
     d.textContent = text;
@@ -134,10 +152,17 @@ async function sendChat(textOverride, skipUser = false) {
     const messages = [
       ...history.filter(m => m.role === 'user' || m.role === 'assistant'),
     ];
-    const { text: reply } = await window.clueless.chat(messages);
-    const elapsedMs = hideLoader();
-    msg('bot', reply, { elapsedMs });
-    status.textContent = `Ready · ${formatElapsed(elapsedMs)}`;
+    const requestStart = performance.now();
+    const { text: reply, timing } = await window.clueless.chat(messages);
+    const receivedMs = performance.now() - requestStart;
+    hideLoader();
+    msg('bot', reply, {
+      timing: {
+        requestStart,
+        receivedMs: timing?.apiMs ?? receivedMs,
+      },
+    });
+    status.textContent = `Ready · recv ${formatElapsed(receivedMs)}`;
   } catch (e) {
     hideLoader();
     msg('sys', `Error: ${e.message}`);
@@ -153,11 +178,18 @@ async function analyzeScreen() {
 
   try {
     showLoader('Analyzing screen…', { keepTimer: true });
-    const { text } = await window.clueless.analyzeScreen(q);
-    const elapsedMs = hideLoader();
-    msg('bot', text, { elapsedMs });
+    const requestStart = performance.now();
+    const { text, timing } = await window.clueless.analyzeScreen(q);
+    const receivedMs = performance.now() - requestStart;
+    hideLoader();
+    msg('bot', text, {
+      timing: {
+        requestStart,
+        receivedMs: timing?.apiMs ?? receivedMs,
+      },
+    });
     prompt.value = '';
-    status.textContent = `Ready · ${formatElapsed(elapsedMs)}`;
+    status.textContent = `Ready · recv ${formatElapsed(receivedMs)}`;
   } catch (e) {
     hideLoader();
     msg('sys', `Screen error: ${e.message}`);

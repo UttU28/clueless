@@ -31,6 +31,135 @@ function runCleanup() {
     env: { ...process.env, CLUELESS_CLEANUP: '1' },
   });
 }
+/** Free-tier Gemini models for new API keys (3.x Flash family). */
+const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
+const LEGACY_GEMINI_MODELS = {
+  'gemini-2.0-flash': 'gemini-3.5-flash',
+  'gemini-2.0-flash-lite': 'gemini-3.1-flash-lite',
+  'gemini-2.5-flash': 'gemini-3.5-flash',
+  'gemini-2.5-flash-lite': 'gemini-3.1-flash-lite',
+};
+const PAID_GEMINI_PATTERNS = [
+  /gemini-2\.5-pro/i,
+  /gemini-3\.[0-9]+-pro/i,
+  /gemini-1\.5-pro/i,
+  /gemini-ultra/i,
+  /gemini-exp/i,
+];
+
+function resolveGeminiModel(model) {
+  let name = (model || DEFAULT_GEMINI_MODEL).replace(/^models\//, '');
+  if (LEGACY_GEMINI_MODELS[name]) name = LEGACY_GEMINI_MODELS[name];
+  if (PAID_GEMINI_PATTERNS.some((pattern) => pattern.test(name))) {
+    throw new Error(
+      `GEMINI_MODEL=${name} is paid-tier only. Use ${DEFAULT_GEMINI_MODEL} or gemini-3.1-flash-lite (free).`,
+    );
+  }
+  return name;
+}
+
+const GEMINI_RETRY_DELAYS_MS = [2000, 4000, 8000];
+const GEMINI_FALLBACK_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildGeminiPayload(messages, image, maxTokens) {
+  const parts = [{ text: messages.filter((m) => m.role === 'user').at(-1)?.content || 'Help with this.' }];
+  if (image?.base64) {
+    parts.push({
+      inline_data: {
+        mime_type: image.mime || 'image/png',
+        data: image.base64,
+      },
+    });
+  }
+
+  const payload = {
+    contents: image?.base64
+      ? [{ role: 'user', parts }]
+      : toGeminiContents(messages),
+    generationConfig: {
+      maxOutputTokens: maxTokens,
+      temperature: 0.7,
+    },
+  };
+
+  const systemInstruction = geminiSystemInstruction(messages);
+  if (systemInstruction) payload.systemInstruction = systemInstruction;
+  return payload;
+}
+
+function formatGeminiFailure(status, body, model) {
+  if (status === 429) {
+    return `Gemini free-tier quota exceeded (${model}). Wait a minute or switch to Gemma.`;
+  }
+  if (status === 503) {
+    return `Gemini "${model}" is busy (high demand). Wait ~30s and try again, or switch to Gemma.`;
+  }
+  if (status === 404 && body.includes('no longer available')) {
+    return `Gemini model "${model}" is unavailable for new API keys. Set GEMINI_MODEL=${DEFAULT_GEMINI_MODEL} in .env.`;
+  }
+  return `Gemini error (${status}) on ${model}: ${body}`;
+}
+
+async function geminiRequest(cfg, messages, image, model) {
+  const provider = activeProvider(cfg, 'gemini');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${provider.apiKey}`;
+  const payload = buildGeminiPayload(messages, image, provider.maxTokens);
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.text();
+
+  if (!res.ok) {
+    return { ok: false, status: res.status, body, model };
+  }
+
+  let data;
+  try {
+    data = JSON.parse(body);
+  } catch {
+    return { ok: false, status: 0, body: 'Invalid JSON from Gemini', model };
+  }
+
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('').trim();
+  if (!text) return { ok: false, status: 0, body: 'Gemini returned no text', model };
+  return { ok: true, text, model };
+}
+
+async function geminiGenerate(cfg, messages, image) {
+  const primary = cfg.geminiModel;
+  const models = [primary, ...GEMINI_FALLBACK_MODELS.filter((m) => m !== primary)];
+  let lastFailure = null;
+
+  for (const model of models) {
+    for (let attempt = 0; attempt <= GEMINI_RETRY_DELAYS_MS.length; attempt++) {
+      const result = await geminiRequest(cfg, messages, image, model);
+      if (result.ok) {
+        if (model !== primary) {
+          console.warn(`Gemini fallback: ${primary} unavailable, used ${model}`);
+        }
+        return result.text;
+      }
+
+      lastFailure = result;
+      const retryable = result.status === 503 || result.status === 429;
+      if (retryable && attempt < GEMINI_RETRY_DELAYS_MS.length) {
+        await sleep(GEMINI_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      break;
+    }
+  }
+
+  throw new Error(formatGeminiFailure(lastFailure.status, lastFailure.body, lastFailure.model));
+}
+
 /** @type {'gemma' | 'gemini'} */
 let aiProvider = process.env.CLUELESS_DEFAULT_PROVIDER === 'gemini' ? 'gemini' : 'gemma';
 
@@ -60,7 +189,7 @@ function getConfig() {
     ),
     localLlmApiKey: process.env.LOCAL_LLM_API_KEY || 'not-needed',
     geminiApiKey: process.env.GEMINI_API_KEY || '',
-    geminiModel: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
+    geminiModel: resolveGeminiModel(process.env.GEMINI_MODEL),
     openaiApiKey: process.env.OPENAI_API_KEY || '',
     openaiBaseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
     openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
@@ -118,46 +247,6 @@ function toGeminiContents(messages) {
 function geminiSystemInstruction(messages) {
   const system = messages.find((m) => m.role === 'system');
   return system ? { parts: [{ text: system.content }] } : undefined;
-}
-
-async function geminiGenerate(cfg, messages, image) {
-  const provider = activeProvider(cfg, 'gemini');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${provider.model}:generateContent?key=${provider.apiKey}`;
-
-  const parts = [{ text: messages.filter((m) => m.role === 'user').at(-1)?.content || 'Help with this.' }];
-  if (image?.base64) {
-    parts.push({
-      inline_data: {
-        mime_type: image.mime || 'image/png',
-        data: image.base64,
-      },
-    });
-  }
-
-  const payload = {
-    contents: image?.base64
-      ? [{ role: 'user', parts }]
-      : toGeminiContents(messages),
-    generationConfig: {
-      maxOutputTokens: provider.maxTokens,
-      temperature: 0.7,
-    },
-  };
-
-  const systemInstruction = geminiSystemInstruction(messages);
-  if (systemInstruction) payload.systemInstruction = systemInstruction;
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`Gemini error (${res.status}): ${await res.text()}`);
-
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('').trim();
-  if (!text) throw new Error('Gemini returned no text');
-  return text;
 }
 
 async function chatCompletion(messages, providerOverride = aiProvider) {
@@ -295,28 +384,30 @@ function setupIpc() {
     const withSystem = messages.some((m) => m.role === 'system')
       ? messages.map((m) => (m.role === 'system' ? { ...m, content: systemPrompt } : m))
       : [{ role: 'system', content: systemPrompt }, ...messages];
+    const apiStart = Date.now();
     const text = await chatCompletion(withSystem);
-    return { text };
+    return { text, timing: { apiMs: Date.now() - apiStart } };
   });
 
   ipcMain.handle('analyze-screen', async (_e, userPrompt) => {
     const shot = await captureScreen();
     const prompt = userPrompt || 'Read the screen and help with whatever is visible.';
     const cfg = getConfig();
+    const apiStart = Date.now();
 
     if (aiProvider === 'gemini' && cfg.geminiApiKey) {
       const text = await geminiGenerate(cfg, [
         { role: 'system', content: INTERVIEW_SYSTEM_PROMPT },
         { role: 'user', content: `${prompt}\n\nLook at the screenshot and help me answer any interview question or problem shown.` },
       ], shot);
-      return { text, imageIncluded: true };
+      return { text, imageIncluded: true, timing: { apiMs: Date.now() - apiStart } };
     }
 
     const text = await chatCompletion([
       { role: 'system', content: 'You are a helpful assistant. Describe the screen and answer any visible question concisely.' },
       { role: 'user', content: `${prompt}\n\n[Note: screen was captured but this model may be text-only. Describe based on user context if vision unavailable.]` },
     ]);
-    return { text, imageIncluded: true };
+    return { text, imageIncluded: true, timing: { apiMs: Date.now() - apiStart } };
   });
 
   ipcMain.handle('transcribe', async (_e, { audioBase64, mimeType }) => {
