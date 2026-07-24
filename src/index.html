@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clueless</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="panel">
+    <header class="titlebar" id="drag-region">
+      <span class="brand">clueless</span>
+      <button id="btn-quit" title="Quit">×</button>
+    </header>
+    <div class="status">
+      <span id="status">Ready</span> · <span id="model">—</span>
+      <div class="provider-toggle" id="provider-toggle">
+        <button type="button" id="btn-provider-gemma" class="provider-btn active">Gemma</button>
+        <button type="button" id="btn-provider-gemini" class="provider-btn">Gemini</button>
+      </div>
+    </div>
+    <div class="chat" id="chat"></div>
+    <div id="chat-loader" class="chat-loader hidden" aria-live="polite" aria-busy="false">
+      <span class="loader-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span id="loader-label" class="loader-label">Thinking…</span>
+    </div>
+    <div class="composer">
+      <textarea id="prompt" rows="2" placeholder="Ask anything…"></textarea>
+      <div class="actions">
+        <button id="btn-listen" title="+">🎤 Listen</button>
+        <button id="btn-screen" title="-">📷 Screen</button>
+        <button id="btn-send" class="primary">Send</button>
+      </div>
+    </div>
+    <div class="hints">+ · Listen &nbsp; - · Screen</div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

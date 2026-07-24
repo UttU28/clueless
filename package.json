@@ -1,0 +1,23 @@
+{
+  "name": "clueless",
+  "version": "0.2.0",
+  "description": "IDK",
+  "main": "electron/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "CLUELESS_DEV=1 electron .",
+    "postinstall": "node scripts/install-electron.js",
+    "whisper:probe": "venv/bin/python3 scripts/whisper_local.py --probe"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^43.2.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  },
+  "allowScripts": {
+    "electron@35.7.5": true
+  }
+}
